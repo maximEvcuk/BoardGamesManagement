@@ -1,135 +1,134 @@
 ﻿using System;
-using System.Collections.Generic;
-using System.ComponentModel.DataAnnotations;
+using System.Data;
+using System.IO;
 using System.Linq;
-using System.Reflection.Emit;
-using Microsoft.EntityFrameworkCore;
-
-public class Game
-{
-    public int Id { get; set; }
-    public string Title { get; set; }
-    public string Genre { get; set; }
-    public int MinPlayers { get; set; }
-    public int MaxPlayers { get; set; }
-    public List<Session> Sessions { get; set; }
-}
-
-public class Member
-{
-    public int Id { get; set; }
-    public string FullName { get; set; }
-    public DateTime JoinDate { get; set; }
-    public List<Session> Sessions { get; set; }
-}
-
-public class Session
-{
-    public int Id { get; set; }
-    public int GameId { get; set; }
-    public Game Game { get; set; }
-
-    public int MemberId { get; set; }
-    public Member Member { get; set; }
-
-    public DateTime Date { get; set; }
-    public int DurationMinutes { get; set; }
-}
-
-public class AppDbContext : DbContext
-{
-    public DbSet<Game> Games { get; set; }
-    public DbSet<Member> Members { get; set; }
-    public DbSet<Session> Sessions { get; set; }
-
-    protected override void OnConfiguring(DbContextOptionsBuilder options)
-        => options.UseSqlite("Data Source=boardgames.db");
-
-    protected override void OnModelCreating(ModelBuilder modelBuilder)
-    {
-        modelBuilder.Entity<Game>(e =>
-        {
-            e.Property(g => g.Title)
-             .HasMaxLength(100)
-             .IsRequired();
-
-            e.Property(g => g.MinPlayers).IsRequired();
-            e.Property(g => g.MaxPlayers).IsRequired();
-            e.HasMany(g => g.Sessions).WithOne(s => s.Game).HasForeignKey(s => s.GameId);
-        });
-
-        modelBuilder.Entity<Member>(e =>
-        {
-            e.Property(m => m.FullName).IsRequired();
-            e.Property(m => m.JoinDate).IsRequired();
-            e.HasMany(m => m.Sessions).WithOne(s => s.Member).HasForeignKey(s => s.MemberId);
-        });
-
-        modelBuilder.Entity<Session>(e =>
-        {
-            e.Property(s => s.Date).IsRequired();
-            e.Property(s => s.DurationMinutes).IsRequired();
-        });
-    }
-}
+using System.Collections.Generic;
+using Dapper;
+using Microsoft.Data.Sqlite;
 
 class Program
 {
+    static IDbConnection GetConnection() =>
+        new SqliteConnection("Data Source=boardgames.db");
+
     static void Main()
     {
-        using var db = new AppDbContext();
-        db.Database.EnsureDeleted();  
-        db.Database.EnsureCreated();
-
-        SeedData(db);
-
-        Console.WriteLine("Базу даних створено та заповнено.");
-        Console.WriteLine($"Ігор: {db.Games.Count()}");
-        Console.WriteLine($"Учасників: {db.Members.Count()}");
-        Console.WriteLine($"Сесій: {db.Sessions.Count()}");
-    }
-
-    static void SeedData(AppDbContext db)
-    {
-        if (db.Games.Any() || db.Members.Any()) return;
-
-        var games = new List<Game>
+        if (!File.Exists("boardgames.db"))
         {
-            new Game { Title = "Catan", Genre = "Strategy", MinPlayers = 3, MaxPlayers = 4 },
-            new Game { Title = "Uno", Genre = "Card", MinPlayers = 2, MaxPlayers = 10 },
-            new Game { Title = "Carcassonne", Genre = "Tile", MinPlayers = 2, MaxPlayers = 5 },
-            new Game { Title = "Dixit", Genre = "Creative", MinPlayers = 3, MaxPlayers = 6 },
-            new Game { Title = "Chess", Genre = "Classic", MinPlayers = 2, MaxPlayers = 2 }
-        };
-
-        var members = new List<Member>
-        {
-            new Member { FullName = "Alice Smith", JoinDate = DateTime.Today.AddDays(-200) },
-            new Member { FullName = "Bob Johnson", JoinDate = DateTime.Today.AddDays(-150) },
-            new Member { FullName = "Carol White", JoinDate = DateTime.Today.AddDays(-100) },
-            new Member { FullName = "Dave Brown", JoinDate = DateTime.Today.AddDays(-50) },
-            new Member { FullName = "Eve Davis", JoinDate = DateTime.Today.AddDays(-10) }
-        };
-
-        db.Games.AddRange(games);
-        db.Members.AddRange(members);
-        db.SaveChanges();
-
-        var random = new Random();
-        var sessions = new List<Session>();
-
-        for (int i = 0; i < 20; i++)
-        {
-            sessions.Add(new Session
-            {
-                GameId = games[random.Next(games.Count)].Id,
-                MemberId = members[random.Next(members.Count)].Id,
-                Date = DateTime.Today.AddDays(-random.Next(1, 100)),
-                DurationMinutes = random.Next(30, 180)
-            });
+            Console.WriteLine("Помилка: Базу даних не знайдено. Спочатку запусти EF Core застосунок.");
+            return;
         }
 
-        db.Sessions.AddRange(sessions);
-        db.SaveChanges();
+        while (true)
+        {
+            Console.WriteLine("\n=== Board Games Analytics (Dapper) ===");
+            Console.WriteLine("1. Всі сесії");
+            Console.WriteLine("2. Топ-3 гри за годинами");
+            Console.WriteLine("3. ТОП учасники за годинами");
+            Console.WriteLine("4. Загальна статистика (можна вказати період)");
+            Console.WriteLine("0. Вихід");
+            Console.Write("Вибір: ");
+            var choice = Console.ReadLine();
+
+            switch (choice)
+            {
+                case "1": ShowAllSessions(); break;
+                case "2": Top3GamesByHours(); break;
+                case "3": TopMembersByHours(); break;
+                case "4": ShowStatistics(); break;
+                case "0": return;
+                default: Console.WriteLine("Невірний вибір."); break;
+            }
+        }
+    }
+
+    static void ShowAllSessions()
+    {
+        using var db = GetConnection();
+        var sql = @"SELECT s.Date, s.DurationMinutes, g.Title AS Game, m.FullName AS Member
+                    FROM Sessions s
+                    JOIN Games g ON s.GameId = g.Id
+                    JOIN Members m ON s.MemberId = m.Id
+                    ORDER BY s.Date DESC";
+
+        var sessions = db.Query(sql);
+
+        Console.WriteLine("\n=== Усі сесії ===");
+        foreach (var s in sessions)
+        {
+            Console.WriteLine($"{((DateTime)s.Date).ToShortDateString()} | {s.Game} | {s.Member} | {s.DurationMinutes} хв");
+        }
+    }
+
+    static void Top3GamesByHours()
+    {
+        using var db = GetConnection();
+        var sql = @"SELECT g.Title, SUM(s.DurationMinutes) / 60.0 AS Hours
+                    FROM Sessions s
+                    JOIN Games g ON s.GameId = g.Id
+                    GROUP BY g.Title
+                    ORDER BY Hours DESC
+                    LIMIT 3";
+
+        var games = db.Query(sql);
+
+        Console.WriteLine("\n=== ТОП-3 гри за годинами ===");
+        foreach (var g in games)
+        {
+            Console.WriteLine($"{g.Title} — {g.Hours:F1} год");
+        }
+    }
+
+    static void TopMembersByHours()
+    {
+        using var db = GetConnection();
+        var sql = @"SELECT m.FullName, SUM(s.DurationMinutes) / 60.0 AS Hours
+                    FROM Sessions s
+                    JOIN Members m ON s.MemberId = m.Id
+                    GROUP BY m.FullName
+                    ORDER BY Hours DESC";
+
+        var members = db.Query(sql);
+
+        Console.WriteLine("\n=== ТОП учасники за ігровими годинами ===");
+        foreach (var m in members)
+        {
+            Console.WriteLine($"{m.FullName} — {m.Hours:F1} год");
+        }
+    }
+
+    static void ShowStatistics()
+    {
+        Console.Write("З дати (yyyy-mm-dd) або Enter: ");
+        string fromInput = Console.ReadLine();
+        Console.Write("До дати (yyyy-mm-dd) або Enter: ");
+        string toInput = Console.ReadLine();
+
+        string sql = @"SELECT COUNT(*) AS Count, SUM(DurationMinutes) AS Total
+                       FROM Sessions
+                       WHERE 1=1";
+
+        var parameters = new DynamicParameters();
+
+        if (DateTime.TryParse(fromInput, out DateTime from))
+        {
+            sql += " AND Date >= @From";
+            parameters.Add("From", from);
+        }
+
+        if (DateTime.TryParse(toInput, out DateTime to))
+        {
+            sql += " AND Date <= @To";
+            parameters.Add("To", to);
+        }
+
+        using var db = GetConnection();
+        var result = db.QueryFirst(sql, parameters);
+
+        int count = result.Count ?? 0;
+        int total = result.Total ?? 0;
+
+        Console.WriteLine($"\nКількість сесій: {count}");
+        Console.WriteLine($"Загальна тривалість: {total} хв ({(total / 60.0):F1} год)");
     }
 }
